@@ -6,7 +6,7 @@ use ark_crypto_primitives::crh::{poseidon::{
     constraints::{CRHParametersVar, TwoToOneCRHGadget},
     TwoToOneCRH,
 }, TwoToOneCRHSchemeGadget};
-use ark_crypto_primitives::crh::{TwoToOneCRHScheme};
+use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::PrimeField;
 use ark_groth16::Groth16;
@@ -38,6 +38,7 @@ use ark_std::rand::{rngs::StdRng, SeedableRng};
 ///   3) leaf             == Poseidon2(Poseidon2(TAG_LEAF, nullifier), secret)
 ///   4) MerkleVerify_Poseidon2(merkle_root, leaf, siblings, bits)
 ///   5) recipient_f * recipient_f == recipient_square
+#[derive(Clone)]
 pub struct WithdrawCircuit<const H: usize> {
     // Poseidon parameters shared by leaf & internal nodes
     pub poseidon_params: PoseidonConfig<Fr>,
@@ -146,10 +147,10 @@ impl<const H: usize> ConstraintSynthesizer<Fr> for WithdrawCircuit<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_crypto_primitives::sponge::poseidon::PoseidonSponge;
     use ark_ff::Field;
     use ark_snark::CircuitSpecificSetupSNARK;
     use ark_std::UniformRand;
+    use crate::SolidityVerifier;
 
     /// Native helper: Poseidon 2→1 compression using the same config as the circuit.
     fn h2(cfg: &PoseidonConfig<Fr>, a: Fr, b: Fr) -> Fr {
@@ -173,16 +174,44 @@ mod tests {
         node
     }
 
+    fn toy_poseidon_cfg() -> PoseidonConfig<Fr> {
+        let rate = 2usize; // 2-to-1 hash -> width 3 (rate 2, capacity 1)
+        let capacity = 1usize;
+        let width = rate + capacity;
+        let full_rounds = 8usize;
+        let partial_rounds = 56usize;
+        let alpha = 5u64;
+
+        // Identity MDS for test determinism
+        let mut mds = vec![vec![Fr::from(0u64); width]; width];
+        for i in 0..width {
+            mds[i][i] = Fr::from(1u64);
+        }
+
+        // Zero round constants (deterministic but insecure; fine for unit test)
+        let rounds = full_rounds + partial_rounds;
+        let ark = vec![vec![Fr::from(0u64); width]; rounds];
+
+        PoseidonConfig::new(
+            full_rounds,
+            partial_rounds,
+            alpha,
+            mds,
+            ark,
+            rate,
+            capacity,
+        )
+    }
+
     #[test]
     fn withdraw_circuit_groth16() {
         const H: usize = 20;
 
-        // Poseidon config (match circuit)
-        // You can bring your own canonical params; for demo, construct from arkworks helper.
-        let poseidon_cfg: PoseidonConfig<Fr> = ark_crypto_primitives::sponge::poseidon::PoseidonConfig::default(); // replace with canonical config you use
+        // Poseidon config (match circuit). Use a deterministic test-only config.
+        let mut rng = StdRng::seed_from_u64(42);
+        let poseidon_cfg: PoseidonConfig<Fr> = toy_poseidon_cfg();
 
         // Random-ish data (deterministic RNG for test)
-        let mut rng = StdRng::seed_from_u64(42);
         let nullifier = Fr::rand(&mut rng);
         let secret = Fr::rand(&mut rng);
         let recipient_f = Fr::rand(&mut rng); // in production: field-encoding of 20-byte address
@@ -231,7 +260,7 @@ mod tests {
 
         // Prove & verify (Groth16 over BN254)
         let mut rng = StdRng::seed_from_u64(7);
-        let (pk, vk) = Groth16::<Bn254>::setup(circ, &mut rng).unwrap();
+        let (pk, vk) = Groth16::<Bn254>::setup(circ.clone(), &mut rng).unwrap();
         let proof = Groth16::<Bn254>::prove(&pk, circ, &mut rng).unwrap();
 
         // Public inputs order must match allocation order
@@ -242,5 +271,8 @@ mod tests {
         ];
 
         assert!(Groth16::<Bn254>::verify(&vk, &publics, &proof).unwrap());
+
+        let sol_verifier = Groth16::export(&vk);
+        println!("{}", sol_verifier);
     }
 }
