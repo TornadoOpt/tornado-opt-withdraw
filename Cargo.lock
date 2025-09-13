@@ -1973,6 +1973,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "revm",
+ "sha3",
 ]
 
 [[package]]
