@@ -2,11 +2,14 @@
 // ark-bn254, ark-groth16, ark-std, ark-crypto-primitives, ark-r1cs-std
 
 use ark_bn254::{Bn254, Fr};
-use ark_crypto_primitives::crh::{poseidon::{
-    constraints::{CRHParametersVar, TwoToOneCRHGadget},
-    TwoToOneCRH,
-}, TwoToOneCRHSchemeGadget};
 use ark_crypto_primitives::crh::TwoToOneCRHScheme;
+use ark_crypto_primitives::crh::{
+    poseidon::{
+        constraints::{CRHParametersVar, TwoToOneCRHGadget},
+        TwoToOneCRH,
+    },
+    TwoToOneCRHSchemeGadget,
+};
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::PrimeField;
 use ark_groth16::Groth16;
@@ -59,33 +62,44 @@ pub struct WithdrawCircuit<const H: usize> {
 }
 
 // Domain-separation tags (feel free to change to your canonical values)
-const TAG_CP: u64 = 11;   // commitment to (merkle_root, index_upper)
+const TAG_CP: u64 = 11; // commitment to (merkle_root, index_upper)
 const TAG_NULL: u64 = 12; // nullifier hash
 const TAG_LEAF: u64 = 13; // leaf(commitment) = Poseidon2(Poseidon2(TAG_LEAF, nullifier), secret)
 
 impl<const H: usize> ConstraintSynthesizer<Fr> for WithdrawCircuit<H> {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
         // ---- allocate public inputs ----
-        let state_commitment_in =
-            FpVar::<Fr>::new_input(cs.clone(), || self.state_commitment.ok_or(SynthesisError::AssignmentMissing))?;
-        let nullifier_hash_in =
-            FpVar::<Fr>::new_input(cs.clone(), || self.nullifier_hash.ok_or(SynthesisError::AssignmentMissing))?;
-        let recipient_square_in =
-            FpVar::<Fr>::new_input(cs.clone(), || self.recipient_square.ok_or(SynthesisError::AssignmentMissing))?;
+        let state_commitment_in = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.state_commitment
+                .ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let nullifier_hash_in = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.nullifier_hash.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let recipient_square_in = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.recipient_square
+                .ok_or(SynthesisError::AssignmentMissing)
+        })?;
 
         // ---- allocate witnesses ----
-        let nullifier =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.nullifier.ok_or(SynthesisError::AssignmentMissing))?;
-        let secret =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.secret.ok_or(SynthesisError::AssignmentMissing))?;
-        let merkle_root =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.merkle_root.ok_or(SynthesisError::AssignmentMissing))?;
-        let index_upper =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.index_upper.ok_or(SynthesisError::AssignmentMissing))?;
-        let recipient_f =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.recipient_f.ok_or(SynthesisError::AssignmentMissing))?;
+        let nullifier = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.nullifier.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let secret = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.secret.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let merkle_root = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.merkle_root.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let index_upper = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.index_upper.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let recipient_f = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.recipient_f.ok_or(SynthesisError::AssignmentMissing)
+        })?;
 
-        let params_var = CRHParametersVar::<Fr>::new_constant(cs.clone(), self.poseidon_params.clone())?;
+        let params_var =
+            CRHParametersVar::<Fr>::new_constant(cs.clone(), self.poseidon_params.clone())?;
 
         // siblings
         let mut siblings = Vec::with_capacity(H);
@@ -141,16 +155,23 @@ impl<const H: usize> ConstraintSynthesizer<Fr> for WithdrawCircuit<H> {
     }
 }
 
-
 // --------------------------- a tiny self-check test ---------------------------
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::Write as _,
+        process::{Command, Stdio},
+    };
+
     use super::*;
+    use crate::{
+        evm::{compile_solidity, Evm},
+        SolidityVerifier,
+    };
     use ark_ff::Field;
     use ark_snark::CircuitSpecificSetupSNARK;
     use ark_std::UniformRand;
-    use crate::SolidityVerifier;
 
     /// Native helper: Poseidon 2→1 compression using the same config as the circuit.
     fn h2(cfg: &PoseidonConfig<Fr>, a: Fr, b: Fr) -> Fr {
@@ -167,7 +188,11 @@ mod tests {
         let mut node = leaf;
         for i in 0..H {
             let bit = (index & 1) == 1;
-            let (l, r) = if bit { (siblings[i], node) } else { (node, siblings[i]) };
+            let (l, r) = if bit {
+                (siblings[i], node)
+            } else {
+                (node, siblings[i])
+            };
             node = h2(cfg, l, r);
             index >>= 1;
         }
@@ -192,15 +217,7 @@ mod tests {
         let rounds = full_rounds + partial_rounds;
         let ark = vec![vec![Fr::from(0u64); width]; rounds];
 
-        PoseidonConfig::new(
-            full_rounds,
-            partial_rounds,
-            alpha,
-            mds,
-            ark,
-            rate,
-            capacity,
-        )
+        PoseidonConfig::new(full_rounds, partial_rounds, alpha, mds, ark, rate, capacity)
     }
 
     #[test]
@@ -264,15 +281,18 @@ mod tests {
         let proof = Groth16::<Bn254>::prove(&pk, circ, &mut rng).unwrap();
 
         // Public inputs order must match allocation order
-        let publics = [
-            state_commitment,
-            nullifier_hash,
-            recipient_square,
-        ];
+        let publics = [state_commitment, nullifier_hash, recipient_square];
 
         assert!(Groth16::<Bn254>::verify(&vk, &publics, &proof).unwrap());
 
         let sol_verifier = Groth16::export(&vk);
-        println!("{}", sol_verifier);
+
+        let verifier_bytecode = compile_solidity(&sol_verifier, "SolVerifier");
+        let mut evm = Evm::default();
+        let verifier_address = evm.create(verifier_bytecode);
+        let (_, output) = evm.call(verifier_address, calldata.clone());
+        assert_eq!(*output.last().unwrap(), 1);
+
+        // Optional: solidity verifier check
     }
 }

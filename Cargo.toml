@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 ark-groth16 = { version = "^0.5.0", default-features = false }
-ark-bn254 = { version = "^0.5.0", default-features = false, features = ["curve"] }
+ark-bn254 = { version = "^0.5.0", default-features = false, features = [
+    "curve",
+] }
 ark-snark = { version = "^0.5.0", default-features = false }
 ark-ff = { version = "^0.5.0", default-features = false }
 ark-ec = { version = "^0.5.0", default-features = false }
@@ -17,4 +19,9 @@ ark-r1cs-std = { version = "^0.5.0", default-features = false }
 ark-std = { version = "^0.5.0", default-features = false }
 rand = "0.8.5"
 blake2 = { version = "0.9", default-features = false }
-ark-crypto-primitives = { version = "^0.5.0", default-features = false, features = ["crh", "sponge", "r1cs"] }
+ark-crypto-primitives = { version = "^0.5.0", default-features = false, features = [
+    "crh",
+    "sponge",
+    "r1cs",
+] }
+revm = { version = "19.5.0", features = ["std"] }
