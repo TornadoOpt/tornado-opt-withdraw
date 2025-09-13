@@ -6,7 +6,7 @@ mod withdraw;
 
 use std::marker::PhantomData;
 
-use ark_bn254::{Bn254, Fr};
+use ark_bn254::Bn254;
 use ark_ec::pairing::Pairing;
 use ark_groth16::Groth16;
 use ark_r1cs_std::{
@@ -14,8 +14,7 @@ use ark_r1cs_std::{
     prelude::{AllocVar, EqGadget},
 };
 use ark_relations::r1cs::{ConstraintSynthesizer, SynthesisError};
-use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
-use ark_std::error::Error;
+use ark_snark::CircuitSpecificSetupSNARK;
 use rand::thread_rng;
 
 struct ExpCircuits<E: Pairing>(Option<u64>, Option<u64>, Option<u64>, PhantomData<E>);

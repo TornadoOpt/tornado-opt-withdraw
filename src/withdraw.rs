@@ -188,9 +188,10 @@ mod tests {
         evm::{compile_solidity, Evm},
         SolidityVerifier,
     };
-    use ark_ff::Field;
+    use ark_ff::{BigInteger as _, Field};
     use ark_snark::CircuitSpecificSetupSNARK;
     use ark_std::UniformRand;
+    use sha3::{Digest, Keccak256};
 
     /// Native helper: Poseidon 2→1 compression using the same config as the circuit.
     fn h2(cfg: &PoseidonConfig<Fr>, a: Fr, b: Fr) -> Fr {
@@ -291,80 +292,82 @@ mod tests {
             f.write_all(sol_verifier.as_bytes()).unwrap();
         }
 
-        let verifier_bytecode = compile_solidity(&sol_verifier, "SolVerifier");
+        let verifier_bytecode = compile_solidity(&sol_verifier, "Verifier");
         let mut evm = Evm::default();
         let verifier_address = evm.create(verifier_bytecode);
 
-        // fn fe_to_be_bytes<F: ark_ff::PrimeField>(f: &F) -> [u8; 32] {
-        //     let mut out = [0u8; 32];
-        //     let bytes = f.into_bigint().to_bytes_be();
-        //     let start = 32 - bytes.len();
-        //     out[start..].copy_from_slice(&bytes);
-        //     out
-        // }
-        // fn usize_to_u256_bytes(v: usize) -> [u8; 32] {
-        //     let mut out = [0u8; 32];
-        //     let mut n = v as u128; // fits easily
-        //     for i in 0..16 {
-        //         out[31 - i] = (n & 0xff) as u8;
-        //         n >>= 8;
-        //     }
-        //     out
-        // }
+        fn fe_to_be_bytes<F: ark_ff::PrimeField>(f: &F) -> [u8; 32] {
+            let mut out = [0u8; 32];
+            let bytes = f.into_bigint().to_bytes_be();
+            let start = 32 - bytes.len();
+            out[start..].copy_from_slice(&bytes);
+            out
+        }
+        fn usize_to_u256_bytes(v: usize) -> [u8; 32] {
+            let mut out = [0u8; 32];
+            let mut n = v as u128; // fits easily
+            for i in 0..16 {
+                out[31 - i] = (n & 0xff) as u8;
+                n >>= 8;
+            }
+            out
+        }
 
-        // // Calldata for internal function signature: verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))
-        // // Note: verify is internal; calldata is constructed for reference or if made public.
-        // let sig_verify = "verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))";
-        // let mut h_verify = Keccak256::new();
-        // h_verify.update(sig_verify.as_bytes());
-        // let selector_verify = &h_verify.finalize()[..4];
+        // Calldata for internal function signature: verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))
+        // Note: verify is internal; calldata is constructed for reference or if made public.
+        let sig_verify =
+            "verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))";
+        let mut h_verify = Keccak256::new();
+        h_verify.update(sig_verify.as_bytes());
+        let selector_verify = &h_verify.finalize()[..4];
 
-        // let head_words = 1 /* offset for input */ + 8 /* proof fields */;
-        // let offset_input = 32 * head_words; // bytes offset
-        // let mut calldata_verify = Vec::with_capacity(4 + head_words * 32 + (1 + publics.len()) * 32);
-        // calldata_verify.extend_from_slice(selector_verify);
-        // // head[0]: offset to input tail (in bytes)
-        // calldata_verify.extend_from_slice(&usize_to_u256_bytes(offset_input));
-        // // head[1..]: proof (static tuple of 8 words)
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.x));
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.y));
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c0));
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c1));
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c0));
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c1));
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.x));
-        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.y));
-        // // tail: input dynamic array (len, elements)
-        // calldata_verify.extend_from_slice(&usize_to_u256_bytes(publics.len()));
-        // for pi in publics.iter() {
-        //     calldata_verify.extend_from_slice(&fe_to_be_bytes(pi));
-        // }
+        let head_words = 1 /* offset for input */ + 8 /* proof fields */;
+        let offset_input = 32 * head_words; // bytes offset
+        let mut calldata_verify =
+            Vec::with_capacity(4 + head_words * 32 + (1 + publics.len()) * 32);
+        calldata_verify.extend_from_slice(selector_verify);
+        // head[0]: offset to input tail (in bytes)
+        calldata_verify.extend_from_slice(&usize_to_u256_bytes(offset_input));
+        // head[1..]: proof (static tuple of 8 words)
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.x));
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.y));
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c0));
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c1));
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c0));
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c1));
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.x));
+        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.y));
+        // tail: input dynamic array (len, elements)
+        calldata_verify.extend_from_slice(&usize_to_u256_bytes(publics.len()));
+        for pi in publics.iter() {
+            calldata_verify.extend_from_slice(&fe_to_be_bytes(pi));
+        }
 
-        // // Calldata for public wrapper verifyTx(Proof,uint256[N]) to actually run on EVM
-        // let sig_tx = format!(
-        //     "verifyTx(((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)),uint256[{}])",
-        //     publics.len()
-        // );
-        // let mut h_tx = Keccak256::new();
-        // h_tx.update(sig_tx.as_bytes());
-        // let selector_tx = &h_tx.finalize()[..4];
-        // let mut calldata_verify_tx = Vec::with_capacity(4 + (8 + publics.len()) * 32);
-        // calldata_verify_tx.extend_from_slice(selector_tx);
-        // // proof (static)
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.a.x));
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.a.y));
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c0));
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c1));
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c0));
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c1));
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.c.x));
-        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.c.y));
-        // // fixed-size uint[N]
-        // for pi in publics.iter() {
-        //     calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(pi));
-        // }
+        // Calldata for public wrapper verifyTx(Proof,uint256[N]) to actually run on EVM
+        let sig_tx = format!(
+            "verifyTx(((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)),uint256[{}])",
+            publics.len()
+        );
+        let mut h_tx = Keccak256::new();
+        h_tx.update(sig_tx.as_bytes());
+        let selector_tx = &h_tx.finalize()[..4];
+        let mut calldata_verify_tx = Vec::with_capacity(4 + (8 + publics.len()) * 32);
+        calldata_verify_tx.extend_from_slice(selector_tx);
+        // proof (static)
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.a.x));
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.a.y));
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c0));
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c1));
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c0));
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c1));
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.c.x));
+        calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.c.y));
+        // fixed-size uint[N]
+        for pi in publics.iter() {
+            calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(pi));
+        }
 
-        // let (_, output) = evm.call(verifier_address, calldata_verify_tx.clone());
-        // assert_eq!(*output.last().unwrap(), 1);
+        let (_, output) = evm.call(verifier_address, calldata_verify_tx.clone());
+        assert_eq!(*output.last().unwrap(), 1);
     }
 }
