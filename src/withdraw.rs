@@ -300,45 +300,6 @@ mod tests {
             out[start..].copy_from_slice(&bytes);
             out
         }
-        fn usize_to_u256_bytes(v: usize) -> [u8; 32] {
-            let mut out = [0u8; 32];
-            let mut n = v as u128; // fits easily
-            for i in 0..16 {
-                out[31 - i] = (n & 0xff) as u8;
-                n >>= 8;
-            }
-            out
-        }
-
-        // Calldata for internal function signature: verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))
-        // Note: verify is internal; calldata is constructed for reference or if made public.
-        let sig_verify =
-            "verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))";
-        let mut h_verify = Keccak256::new();
-        h_verify.update(sig_verify.as_bytes());
-        let selector_verify = &h_verify.finalize()[..4];
-
-        let head_words = 1 /* offset for input */ + 8 /* proof fields */;
-        let offset_input = 32 * head_words; // bytes offset
-        let mut calldata_verify =
-            Vec::with_capacity(4 + head_words * 32 + (1 + publics.len()) * 32);
-        calldata_verify.extend_from_slice(selector_verify);
-        // head[0]: offset to input tail (in bytes)
-        calldata_verify.extend_from_slice(&usize_to_u256_bytes(offset_input));
-        // head[1..]: proof (static tuple of 8 words)
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.x));
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.y));
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c0));
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c1));
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c0));
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c1));
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.x));
-        calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.y));
-        // tail: input dynamic array (len, elements)
-        calldata_verify.extend_from_slice(&usize_to_u256_bytes(publics.len()));
-        for pi in publics.iter() {
-            calldata_verify.extend_from_slice(&fe_to_be_bytes(pi));
-        }
 
         // Calldata for public wrapper verifyTx(Proof,uint256[N]) to actually run on EVM
         let sig_tx = format!(
