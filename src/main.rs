@@ -1,8 +1,8 @@
 mod constants;
-mod evm;
+pub mod evm;
 mod pairings;
 mod schemes;
-mod withdraw;
+pub mod withdraw;
 
 use std::marker::PhantomData;
 

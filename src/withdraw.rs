@@ -178,10 +178,7 @@ fn sonobe_poseidon2to1_cfg() -> PoseidonConfig<Fr> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::Write as _,
-        process::{Command, Stdio},
-    };
+    use std::io::Write as _;
 
     use super::*;
     use crate::{
