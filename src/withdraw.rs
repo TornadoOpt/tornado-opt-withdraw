@@ -2,6 +2,7 @@
 // ark-bn254, ark-groth16, ark-std, ark-crypto-primitives, ark-r1cs-std
 
 use ark_bn254::{Bn254, Fr};
+use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 use ark_crypto_primitives::crh::{
     poseidon::{
         constraints::{CRHParametersVar, TwoToOneCRHGadget},
@@ -9,8 +10,7 @@ use ark_crypto_primitives::crh::{
     },
     TwoToOneCRHSchemeGadget,
 };
-use ark_crypto_primitives::crh::TwoToOneCRHScheme;
-use ark_crypto_primitives::sponge::poseidon::{PoseidonConfig, find_poseidon_ark_and_mds};
+use ark_crypto_primitives::sponge::poseidon::{find_poseidon_ark_and_mds, PoseidonConfig};
 use ark_ff::PrimeField;
 use ark_groth16::Groth16;
 use ark_r1cs_std::{
@@ -62,33 +62,44 @@ pub struct WithdrawCircuit<const H: usize> {
 }
 
 // Domain-separation tags (feel free to change to your canonical values)
-const TAG_CP: u64 = 11;   // commitment to (merkle_root, index_upper)
+const TAG_CP: u64 = 11; // commitment to (merkle_root, index_upper)
 const TAG_NULL: u64 = 12; // nullifier hash
 const TAG_LEAF: u64 = 13; // leaf(commitment) = Poseidon2(Poseidon2(TAG_LEAF, nullifier), secret)
 
 impl<const H: usize> ConstraintSynthesizer<Fr> for WithdrawCircuit<H> {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
         // ---- allocate public inputs ----
-        let state_commitment_in =
-            FpVar::<Fr>::new_input(cs.clone(), || self.state_commitment.ok_or(SynthesisError::AssignmentMissing))?;
-        let nullifier_hash_in =
-            FpVar::<Fr>::new_input(cs.clone(), || self.nullifier_hash.ok_or(SynthesisError::AssignmentMissing))?;
-        let recipient_square_in =
-            FpVar::<Fr>::new_input(cs.clone(), || self.recipient_square.ok_or(SynthesisError::AssignmentMissing))?;
+        let state_commitment_in = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.state_commitment
+                .ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let nullifier_hash_in = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.nullifier_hash.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let recipient_square_in = FpVar::<Fr>::new_input(cs.clone(), || {
+            self.recipient_square
+                .ok_or(SynthesisError::AssignmentMissing)
+        })?;
 
         // ---- allocate witnesses ----
-        let nullifier =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.nullifier.ok_or(SynthesisError::AssignmentMissing))?;
-        let secret =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.secret.ok_or(SynthesisError::AssignmentMissing))?;
-        let merkle_root =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.merkle_root.ok_or(SynthesisError::AssignmentMissing))?;
-        let index_upper =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.index_upper.ok_or(SynthesisError::AssignmentMissing))?;
-        let recipient_f =
-            FpVar::<Fr>::new_witness(cs.clone(), || self.recipient_f.ok_or(SynthesisError::AssignmentMissing))?;
+        let nullifier = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.nullifier.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let secret = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.secret.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let merkle_root = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.merkle_root.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let index_upper = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.index_upper.ok_or(SynthesisError::AssignmentMissing)
+        })?;
+        let recipient_f = FpVar::<Fr>::new_witness(cs.clone(), || {
+            self.recipient_f.ok_or(SynthesisError::AssignmentMissing)
+        })?;
 
-        let params_var = CRHParametersVar::<Fr>::new_constant(cs.clone(), self.poseidon_params.clone())?;
+        let params_var =
+            CRHParametersVar::<Fr>::new_constant(cs.clone(), self.poseidon_params.clone())?;
 
         // siblings
         let mut siblings = Vec::with_capacity(H);
@@ -167,12 +178,19 @@ fn sonobe_poseidon2to1_cfg() -> PoseidonConfig<Fr> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::Write as _,
+        process::{Command, Stdio},
+    };
+
     use super::*;
+    use crate::{
+        evm::{compile_solidity, Evm},
+        SolidityVerifier,
+    };
     use ark_ff::Field;
     use ark_snark::CircuitSpecificSetupSNARK;
     use ark_std::UniformRand;
-    // If you have an exporter in your crate, re-enable:
-    use crate::SolidityVerifier;
 
     /// Native helper: Poseidon 2→1 compression using the same config as the circuit.
     fn h2(cfg: &PoseidonConfig<Fr>, a: Fr, b: Fr) -> Fr {
@@ -189,7 +207,11 @@ mod tests {
         let mut node = leaf;
         for i in 0..H {
             let bit = (index & 1) == 1;
-            let (l, r) = if bit { (siblings[i], node) } else { (node, siblings[i]) };
+            let (l, r) = if bit {
+                (siblings[i], node)
+            } else {
+                (node, siblings[i])
+            };
             node = h2(cfg, l, r);
             index >>= 1;
         }
@@ -257,16 +279,92 @@ mod tests {
         let proof = Groth16::<Bn254>::prove(&pk, circ, &mut rng).unwrap();
 
         // Public inputs order must match allocation order
-        let publics = [
-            state_commitment,
-            nullifier_hash,
-            recipient_square,
-        ];
+        let publics = [state_commitment, nullifier_hash, recipient_square];
 
         assert!(Groth16::<Bn254>::verify(&vk, &publics, &proof).unwrap());
 
         // If you have an on-chain exporter, re-enable:
         let sol_verifier = Groth16::export(&vk);
-        println!("{}", sol_verifier);
+        // save to file for debugging
+        {
+            let mut f = std::fs::File::create("withdraw_solidity_verifier.sol").unwrap();
+            f.write_all(sol_verifier.as_bytes()).unwrap();
+        }
+
+        let verifier_bytecode = compile_solidity(&sol_verifier, "SolVerifier");
+        let mut evm = Evm::default();
+        let verifier_address = evm.create(verifier_bytecode);
+
+        // fn fe_to_be_bytes<F: ark_ff::PrimeField>(f: &F) -> [u8; 32] {
+        //     let mut out = [0u8; 32];
+        //     let bytes = f.into_bigint().to_bytes_be();
+        //     let start = 32 - bytes.len();
+        //     out[start..].copy_from_slice(&bytes);
+        //     out
+        // }
+        // fn usize_to_u256_bytes(v: usize) -> [u8; 32] {
+        //     let mut out = [0u8; 32];
+        //     let mut n = v as u128; // fits easily
+        //     for i in 0..16 {
+        //         out[31 - i] = (n & 0xff) as u8;
+        //         n >>= 8;
+        //     }
+        //     out
+        // }
+
+        // // Calldata for internal function signature: verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))
+        // // Note: verify is internal; calldata is constructed for reference or if made public.
+        // let sig_verify = "verify(uint256[],((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)))";
+        // let mut h_verify = Keccak256::new();
+        // h_verify.update(sig_verify.as_bytes());
+        // let selector_verify = &h_verify.finalize()[..4];
+
+        // let head_words = 1 /* offset for input */ + 8 /* proof fields */;
+        // let offset_input = 32 * head_words; // bytes offset
+        // let mut calldata_verify = Vec::with_capacity(4 + head_words * 32 + (1 + publics.len()) * 32);
+        // calldata_verify.extend_from_slice(selector_verify);
+        // // head[0]: offset to input tail (in bytes)
+        // calldata_verify.extend_from_slice(&usize_to_u256_bytes(offset_input));
+        // // head[1..]: proof (static tuple of 8 words)
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.x));
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.a.y));
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c0));
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c1));
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c0));
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c1));
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.x));
+        // calldata_verify.extend_from_slice(&fe_to_be_bytes(&proof.c.y));
+        // // tail: input dynamic array (len, elements)
+        // calldata_verify.extend_from_slice(&usize_to_u256_bytes(publics.len()));
+        // for pi in publics.iter() {
+        //     calldata_verify.extend_from_slice(&fe_to_be_bytes(pi));
+        // }
+
+        // // Calldata for public wrapper verifyTx(Proof,uint256[N]) to actually run on EVM
+        // let sig_tx = format!(
+        //     "verifyTx(((uint256,uint256),(uint256[2],uint256[2]),(uint256,uint256)),uint256[{}])",
+        //     publics.len()
+        // );
+        // let mut h_tx = Keccak256::new();
+        // h_tx.update(sig_tx.as_bytes());
+        // let selector_tx = &h_tx.finalize()[..4];
+        // let mut calldata_verify_tx = Vec::with_capacity(4 + (8 + publics.len()) * 32);
+        // calldata_verify_tx.extend_from_slice(selector_tx);
+        // // proof (static)
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.a.x));
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.a.y));
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c0));
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.x.c1));
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c0));
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.b.y.c1));
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.c.x));
+        // calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(&proof.c.y));
+        // // fixed-size uint[N]
+        // for pi in publics.iter() {
+        //     calldata_verify_tx.extend_from_slice(&fe_to_be_bytes(pi));
+        // }
+
+        // let (_, output) = evm.call(verifier_address, calldata_verify_tx.clone());
+        // assert_eq!(*output.last().unwrap(), 1);
     }
 }

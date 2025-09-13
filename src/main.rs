@@ -1,7 +1,8 @@
-mod schemes;
-mod pairings;
-mod withdraw;
 mod constants;
+mod evm;
+mod pairings;
+mod schemes;
+mod withdraw;
 
 use std::marker::PhantomData;
 
