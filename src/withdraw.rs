@@ -2,12 +2,15 @@
 // ark-bn254, ark-groth16, ark-std, ark-crypto-primitives, ark-r1cs-std
 
 use ark_bn254::{Bn254, Fr};
-use ark_crypto_primitives::crh::{poseidon::{
-    constraints::{CRHParametersVar, TwoToOneCRHGadget},
-    TwoToOneCRH,
-}, TwoToOneCRHSchemeGadget};
+use ark_crypto_primitives::crh::{
+    poseidon::{
+        constraints::{CRHParametersVar, TwoToOneCRHGadget},
+        TwoToOneCRH,
+    },
+    TwoToOneCRHSchemeGadget,
+};
 use ark_crypto_primitives::crh::TwoToOneCRHScheme;
-use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
+use ark_crypto_primitives::sponge::poseidon::{PoseidonConfig, find_poseidon_ark_and_mds};
 use ark_ff::PrimeField;
 use ark_groth16::Groth16;
 use ark_r1cs_std::{
@@ -141,6 +144,24 @@ impl<const H: usize> ConstraintSynthesizer<Fr> for WithdrawCircuit<H> {
     }
 }
 
+/// Sonobe transcript-aligned Poseidon config for BN254 (used for 2→1 Merkle compression / CRH):
+///   rate=2, capacity=1 (width=3), alpha=5, full_rounds=8, partial_rounds=56.
+/// MDS/ARK are derived via `find_poseidon_ark_and_mds` exactly like Sonobe.
+fn sonobe_poseidon2to1_cfg() -> PoseidonConfig<Fr> {
+    let rate = 2usize;
+    let capacity = 1usize;
+    let full_rounds = 8usize;
+    let partial_rounds = 56usize;
+
+    let (ark, mds) = find_poseidon_ark_and_mds::<Fr>(
+        Fr::MODULUS_BIT_SIZE as u64,
+        rate,
+        full_rounds as u64,
+        partial_rounds as u64,
+        0, // seed index
+    );
+    PoseidonConfig::new(full_rounds, partial_rounds, 5u64, mds, ark, rate, capacity)
+}
 
 // --------------------------- a tiny self-check test ---------------------------
 
@@ -150,6 +171,7 @@ mod tests {
     use ark_ff::Field;
     use ark_snark::CircuitSpecificSetupSNARK;
     use ark_std::UniformRand;
+    // If you have an exporter in your crate, re-enable:
     use crate::SolidityVerifier;
 
     /// Native helper: Poseidon 2→1 compression using the same config as the circuit.
@@ -174,42 +196,13 @@ mod tests {
         node
     }
 
-    fn toy_poseidon_cfg() -> PoseidonConfig<Fr> {
-        let rate = 2usize; // 2-to-1 hash -> width 3 (rate 2, capacity 1)
-        let capacity = 1usize;
-        let width = rate + capacity;
-        let full_rounds = 8usize;
-        let partial_rounds = 56usize;
-        let alpha = 5u64;
-
-        // Identity MDS for test determinism
-        let mut mds = vec![vec![Fr::from(0u64); width]; width];
-        for i in 0..width {
-            mds[i][i] = Fr::from(1u64);
-        }
-
-        // Zero round constants (deterministic but insecure; fine for unit test)
-        let rounds = full_rounds + partial_rounds;
-        let ark = vec![vec![Fr::from(0u64); width]; rounds];
-
-        PoseidonConfig::new(
-            full_rounds,
-            partial_rounds,
-            alpha,
-            mds,
-            ark,
-            rate,
-            capacity,
-        )
-    }
-
     #[test]
     fn withdraw_circuit_groth16() {
         const H: usize = 20;
 
-        // Poseidon config (match circuit). Use a deterministic test-only config.
+        // Poseidon config (Sonobe-aligned)
         let mut rng = StdRng::seed_from_u64(42);
-        let poseidon_cfg: PoseidonConfig<Fr> = toy_poseidon_cfg();
+        let poseidon_cfg: PoseidonConfig<Fr> = super::sonobe_poseidon2to1_cfg();
 
         // Random-ish data (deterministic RNG for test)
         let nullifier = Fr::rand(&mut rng);
@@ -217,9 +210,9 @@ mod tests {
         let recipient_f = Fr::rand(&mut rng); // in production: field-encoding of 20-byte address
 
         // Tags
-        let tag_cp = Fr::from(TAG_CP);
-        let tag_null = Fr::from(TAG_NULL);
-        let tag_leaf = Fr::from(TAG_LEAF);
+        let tag_cp = Fr::from(super::TAG_CP);
+        let tag_null = Fr::from(super::TAG_NULL);
+        let tag_leaf = Fr::from(super::TAG_LEAF);
 
         // nullifier_hash
         let nullifier_hash = h2(&poseidon_cfg, tag_null, nullifier);
@@ -272,6 +265,7 @@ mod tests {
 
         assert!(Groth16::<Bn254>::verify(&vk, &publics, &proof).unwrap());
 
+        // If you have an on-chain exporter, re-enable:
         let sol_verifier = Groth16::export(&vk);
         println!("{}", sol_verifier);
     }
