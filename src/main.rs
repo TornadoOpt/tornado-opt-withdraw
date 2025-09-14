@@ -64,7 +64,7 @@ impl<E: Pairing> ConstraintSynthesizer<E::ScalarField> for ExpCircuits<E> {
 fn main() {
     let rng = &mut thread_rng();
 
-    let (pk, vk) =
+    let (_pk, vk) =
         Groth16::<Bn254>::setup(ExpCircuits::<Bn254>(None, None, None, PhantomData), rng).unwrap();
     let sol_verifier = Groth16::export(&vk);
 

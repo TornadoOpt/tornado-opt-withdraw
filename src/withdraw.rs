@@ -1,18 +1,13 @@
 // Cargo features expected (typical):
 // ark-bn254, ark-groth16, ark-std, ark-crypto-primitives, ark-r1cs-std
 
-use ark_bn254::{Bn254, Fr};
-use ark_crypto_primitives::crh::TwoToOneCRHScheme;
+use ark_bn254::Fr;
 use ark_crypto_primitives::crh::{
-    poseidon::{
-        constraints::{CRHParametersVar, TwoToOneCRHGadget},
-        TwoToOneCRH,
-    },
+    poseidon::constraints::{CRHParametersVar, TwoToOneCRHGadget},
     TwoToOneCRHSchemeGadget,
 };
-use ark_crypto_primitives::sponge::poseidon::{find_poseidon_ark_and_mds, PoseidonConfig};
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_ff::PrimeField;
-use ark_groth16::Groth16;
 use ark_r1cs_std::{
     boolean::Boolean,
     eq::EqGadget,
@@ -20,8 +15,6 @@ use ark_r1cs_std::{
     prelude::{AllocVar, CondSelectGadget},
 };
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
-use ark_snark::SNARK;
-use ark_std::rand::{rngs::StdRng, SeedableRng};
 
 /// Poseidon Merkle withdraw circuit (no folding, plain Groth16)
 /// Public inputs:
@@ -41,6 +34,7 @@ use ark_std::rand::{rngs::StdRng, SeedableRng};
 ///   3) leaf             == Poseidon2(Poseidon2(TAG_LEAF, nullifier), secret)
 ///   4) MerkleVerify_Poseidon2(merkle_root, leaf, siblings, bits)
 ///   5) recipient_f * recipient_f == recipient_square
+
 #[derive(Clone)]
 pub struct WithdrawCircuit<const H: usize> {
     // Poseidon parameters shared by leaf & internal nodes
@@ -155,38 +149,52 @@ impl<const H: usize> ConstraintSynthesizer<Fr> for WithdrawCircuit<H> {
     }
 }
 
-/// Sonobe transcript-aligned Poseidon config for BN254 (used for 2→1 Merkle compression / CRH):
-///   rate=2, capacity=1 (width=3), alpha=5, full_rounds=8, partial_rounds=56.
-/// MDS/ARK are derived via `find_poseidon_ark_and_mds` exactly like Sonobe.
-fn sonobe_poseidon2to1_cfg() -> PoseidonConfig<Fr> {
-    let rate = 2usize;
-    let capacity = 1usize;
-    let full_rounds = 8usize;
-    let partial_rounds = 56usize;
+pub fn poseidon_canonical_config<F: PrimeField>() -> PoseidonConfig<F> {
+    // 120 bit security target as in
+    // https://eprint.iacr.org/2019/458.pdf
+    // t = rate + 1
 
-    let (ark, mds) = find_poseidon_ark_and_mds::<Fr>(
-        Fr::MODULUS_BIT_SIZE as u64,
+    let full_rounds = 8;
+    let partial_rounds = 60;
+    let alpha = 5;
+    let rate = 4;
+
+    let (ark, mds) = ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds::<F>(
+        F::MODULUS_BIT_SIZE as u64,
         rate,
-        full_rounds as u64,
-        partial_rounds as u64,
-        0, // seed index
+        full_rounds,
+        partial_rounds,
+        0,
     );
-    PoseidonConfig::new(full_rounds, partial_rounds, 5u64, mds, ark, rate, capacity)
+
+    PoseidonConfig::new(
+        full_rounds as usize,
+        partial_rounds as usize,
+        alpha,
+        mds,
+        ark,
+        rate,
+        1,
+    )
 }
-
-// --------------------------- a tiny self-check test ---------------------------
-
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
 
     use super::*;
+    use ark_bn254::Bn254;
+    use ark_crypto_primitives::crh::{poseidon::TwoToOneCRH, TwoToOneCRHScheme as _};
     use ark_ff::{BigInteger as _, Field};
-    use ark_snark::CircuitSpecificSetupSNARK;
+    use ark_groth16::Groth16;
+    use ark_snark::{CircuitSpecificSetupSNARK, SNARK as _};
     use ark_std::UniformRand;
+    use rand::{rngs::StdRng, SeedableRng as _};
     use sha3::{Digest, Keccak256};
     // If you have an exporter in your crate, re-enable:
-    use crate::{evm::{compile_solidity, Evm}, SolidityVerifier};
+    use crate::{
+        evm::{compile_solidity, Evm},
+        SolidityVerifier as _,
+    };
 
     /// Native helper: Poseidon 2→1 compression using the same config as the circuit.
     fn h2(cfg: &PoseidonConfig<Fr>, a: Fr, b: Fr) -> Fr {
@@ -219,9 +227,8 @@ mod tests {
         const H: usize = 20;
 
         // Poseidon config (Sonobe-aligned)
-        let mut rng = StdRng::seed_from_u64(42);
-        let poseidon_cfg: PoseidonConfig<Fr> = super::sonobe_poseidon2to1_cfg();
-
+        let mut rng = StdRng::seed_from_u64(7);
+        let poseidon_cfg: PoseidonConfig<Fr> = poseidon_canonical_config();
         // Random-ish data (deterministic RNG for test)
         let nullifier = Fr::rand(&mut rng);
         let secret = Fr::rand(&mut rng);
